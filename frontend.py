@@ -1,860 +1,548 @@
 """
-AI Data Analytics Frontend - Enhanced Version
-Features: Auto-suggestions, Rich UI, Dark mode, Multiple exports, Quality score, Sample datasets
+AI Data Analytics Platform - Complete Fixed Frontend
+Chart Builder & Insights Fixed + AI Analysis First
 """
 
 import streamlit as st
 import requests
 import pandas as pd
-import json
-import plotly.graph_objects as go
-from typing import Dict, Any, List
-import time
+import base64
+from datetime import datetime
+
+# ============================================================================
+# PAGE CONFIG
+# ============================================================================
+st.set_page_config(
+    page_title="AI Data Analytics Platform",
+    page_icon="🎯",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
 API_URL = "http://localhost:8000/api"
 
-st.set_page_config(
-    page_title="AI Data Analytics Platform",
-    page_icon="🤖",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# ============================================================================
+# SESSION STATE
+# ============================================================================
+if 'theme' not in st.session_state:
+    st.session_state.theme = 'dark'
+if 'dataset_id' not in st.session_state:
+    st.session_state.dataset_id = None
+if 'metadata' not in st.session_state:
+    st.session_state.metadata = None
+if 'quality_score' not in st.session_state:
+    st.session_state.quality_score = None
+if 'summary' not in st.session_state:
+    st.session_state.summary = None
+if 'suggestions' not in st.session_state:
+    st.session_state.suggestions = []
+if 'chat_history' not in st.session_state:
+    st.session_state.chat_history = []
+if 'sample_data' not in st.session_state:
+    st.session_state.sample_data = None
+if 'last_uploaded' not in st.session_state:
+    st.session_state.last_uploaded = None
+if 'auto_charts' not in st.session_state:
+    st.session_state.auto_charts = []
 
 # ============================================================================
-# CUSTOM CSS WITH ANIMATIONS & GRADIENTS
+# THEME CSS
 # ============================================================================
-st.markdown("""
-<style>
-    /* Main gradient background with animation */
-    .stApp {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        background-size: 400% 400%;
-        animation: gradient 15s ease infinite;
-    }
-    
-    @keyframes gradient {
-        0% { background-position: 0% 50%; }
-        50% { background-position: 100% 50%; }
-        100% { background-position: 0% 50%; }
-    }
-    
-    /* Main header with gradient text */
-    .main-header {
-        font-size: 3.5rem;
-        font-weight: bold;
-        background: linear-gradient(90deg, #FFD700 0%, #FFA500 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        text-align: center;
-        margin-bottom: 2rem;
-        animation: fadeInDown 1s ease-in;
-    }
-    
-    @keyframes fadeInDown {
-        from {
-            opacity: 0;
-            transform: translateY(-20px);
-        }
-        to {
-            opacity: 1;
-            transform: translateY(0);
-        }
-    }
-    
-    /* Animated insight cards */
-    .insight-card {
-        padding: 1.5rem;
-        border-radius: 15px;
-        margin: 1rem 0;
-        background: rgba(255, 255, 255, 0.95);
-        border-left: 5px solid #667eea;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        transition: all 0.3s ease;
-        animation: slideInLeft 0.5s ease;
-    }
-    
-    .insight-card:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 8px 15px rgba(0, 0, 0, 0.2);
-    }
-    
-    @keyframes slideInLeft {
-        from {
-            opacity: 0;
-            transform: translateX(-30px);
-        }
-        to {
-            opacity: 1;
-            transform: translateX(0);
-        }
-    }
-    
-    /* Metric cards with gradient */
-    .metric-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 2rem;
-        border-radius: 15px;
-        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
-        text-align: center;
-        color: white;
-        transition: transform 0.3s ease;
-        animation: fadeIn 1s ease;
-    }
-    
-    .metric-card:hover {
-        transform: scale(1.05);
-    }
-    
-    @keyframes fadeIn {
-        from { opacity: 0; }
-        to { opacity: 1; }
-    }
-    
-    .metric-value {
-        font-size: 3rem;
-        font-weight: bold;
-        color: #FFD700;
-        text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
-    }
-    
-    .metric-label {
-        font-size: 1.2rem;
-        color: white;
-        margin-top: 0.5rem;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-    }
-    
-    /* Quality score badge */
-    .quality-badge {
-        display: inline-block;
-        padding: 0.5rem 1.5rem;
-        border-radius: 25px;
-        font-size: 1.5rem;
-        font-weight: bold;
-        color: white;
-        margin: 1rem 0;
-        animation: pulse 2s infinite;
-    }
-    
-    .quality-excellent { background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); }
-    .quality-good { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
-    .quality-fair { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }
-    .quality-poor { background: linear-gradient(135deg, #fa709a 0%, #fee140 100%); }
-    
-    @keyframes pulse {
-        0%, 100% { transform: scale(1); }
-        50% { transform: scale(1.05); }
-    }
-    
-    /* Suggested questions with animation */
-    .suggested-question {
-        padding: 1rem 1.5rem;
-        margin: 0.5rem 0;
-        background: rgba(255, 255, 255, 0.9);
-        border-radius: 10px;
-        border-left: 4px solid #667eea;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        animation: fadeInUp 0.5s ease;
-    }
-    
-    .suggested-question:hover {
-        background: rgba(255, 255, 255, 1);
-        transform: translateX(10px);
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-    }
-    
-    @keyframes fadeInUp {
-        from {
-            opacity: 0;
-            transform: translateY(20px);
-        }
-        to {
-            opacity: 1;
-            transform: translateY(0);
-        }
-    }
-    
-    /* Quick action buttons */
-    .action-button {
-        padding: 0.75rem 2rem;
-        margin: 0.5rem;
-        border-radius: 25px;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        font-weight: bold;
-        border: none;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
-    }
-    
-    .action-button:hover {
-        transform: translateY(-3px);
-        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
-    }
-    
-    /* Data preview table styling */
-    .dataframe {
-        border-radius: 10px;
-        overflow: hidden;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    }
-    
-    /* Typing effect for AI responses */
-    .typing-text {
-        animation: typing 3.5s steps(40, end);
-        overflow: hidden;
-        white-space: nowrap;
-        border-right: 3px solid #667eea;
-    }
-    
-    @keyframes typing {
-        from { width: 0 }
-        to { width: 100% }
-    }
-    
-    /* Sidebar styling */
-    [data-testid="stSidebar"] {
-        background: rgba(255, 255, 255, 0.95);
-        border-radius: 0 20px 20px 0;
-    }
-    
-    /* Content container */
-    .content-container {
-        background: rgba(255, 255, 255, 0.95);
-        padding: 2rem;
-        border-radius: 20px;
-        margin: 1rem 0;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
-    }
-    
-    /* Upload area */
-    [data-testid="stFileUploader"] {
-        border: 3px dashed #667eea;
-        border-radius: 15px;
-        padding: 2rem;
-        background: rgba(255, 255, 255, 0.9);
-        transition: all 0.3s ease;
-    }
-    
-    [data-testid="stFileUploader"]:hover {
-        border-color: #764ba2;
-        background: rgba(255, 255, 255, 1);
-        transform: scale(1.02);
-    }
-</style>
-""", unsafe_allow_html=True)
+def get_theme_css(theme='dark'):
+    if theme == 'dark':
+        return """
+        <style>
+            .stApp { background: linear-gradient(135deg, #1A1A1A 0%, #2D1B2E 100%); }
+            .main-header { color: #CE1141; text-shadow: 2px 2px 4px rgba(0,0,0,0.5); }
+            h1, h2, h3 { color: #CE1141; }
+            .stMetric { background: rgba(206, 17, 65, 0.1); border-radius: 10px; padding: 15px; }
+            [data-testid="stMetricValue"] { color: #CE1141; font-size: 2rem; font-weight: 700; }
+            .stButton button {
+                background: linear-gradient(135deg, #CE1141 0%, #BF4B96 100%);
+                color: white; border: none; border-radius: 8px; padding: 10px 20px;
+                font-weight: 600; transition: all 0.3s;
+            }
+            .stButton button:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 5px 15px rgba(206, 17, 65, 0.4);
+            }
+            [data-testid="stSidebar"] {
+                background: linear-gradient(180deg, #2D1B2E 0%, #1A1A1A 100%);
+            }
+            .stTabs [data-baseweb="tab"] {
+                background: rgba(206, 17, 65, 0.1);
+                border-radius: 8px 8px 0 0;
+                font-weight: 600;
+            }
+            .stTabs [data-baseweb="tab"][aria-selected="true"] {
+                background: #CE1141;
+                color: white;
+            }
+        </style>
+        """
+    else:
+        return """
+        <style>
+            .stApp { background: linear-gradient(135deg, #F8F9FA 0%, #FFFFFF 100%); }
+            h1, h2, h3 { color: #2C3E50; }
+            .stMetric { background: #F8F9FA; border-radius: 10px; padding: 15px; }
+            [data-testid="stMetricValue"] { color: #CE1141; font-size: 2rem; font-weight: 700; }
+            .stButton button {
+                background: linear-gradient(135deg, #CE1141 0%, #BF4B96 100%);
+                color: white; border: none; border-radius: 8px;
+                padding: 10px 20px; font-weight: 600;
+            }
+            [data-testid="stSidebar"] { background: #F8F9FA; }
+        </style>
+        """
+
+st.markdown(get_theme_css(st.session_state.theme), unsafe_allow_html=True)
 
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
-
-def display_metric_card(label: str, value: Any):
-    """Display animated metric card"""
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-value">{value}</div>
-        <div class="metric-label">{label}</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-def display_quality_badge(score: float, grade: str):
-    """Display quality score badge"""
-    if score >= 90:
-        badge_class = "quality-excellent"
-    elif score >= 70:
-        badge_class = "quality-good"
-    elif score >= 50:
-        badge_class = "quality-fair"
-    else:
-        badge_class = "quality-poor"
-    
-    st.markdown(f"""
-    <div class="quality-badge {badge_class}">
-        🏆 Quality Score: {score}/100 ({grade})
-    </div>
-    """, unsafe_allow_html=True)
-
-def render_chart(chart_json: str):
-    """Render a Plotly chart from JSON"""
+def check_backend():
     try:
-        fig = go.Figure(json.loads(chart_json))
-        st.plotly_chart(fig, use_container_width=True)
-    except Exception as e:
-        st.error(f"Error rendering chart: {e}")
-
-def download_file(dataset_id: str, format_type: str):
-    """Download file in specified format"""
-    try:
-        response = requests.get(f"{API_URL}/export/{format_type}/{dataset_id}")
-        if response.status_code == 200:
-            return response.content
-        return None
-    except Exception as e:
-        st.error(f"Error downloading: {e}")
-        return None
-
-def typing_effect(text: str, speed: float = 0.03):
-    """Simulate typing effect"""
-    placeholder = st.empty()
-    displayed_text = ""
-    for char in text:
-        displayed_text += char
-        placeholder.markdown(displayed_text)
-        time.sleep(speed)
+        response = requests.get(API_URL.replace('/api', ''))
+        return response.status_code == 200
+    except:
+        return False
 
 # ============================================================================
 # MAIN APP
 # ============================================================================
-
 def main():
-    # Animated header
-    st.markdown('<h1 class="main-header">🤖 AI Data Analytics Platform</h1>', unsafe_allow_html=True)
+    st.markdown("""
+    <h1 class="main-header" style="text-align: center;">
+        🎯 AI Data Analytics Platform
+    </h1>
+    <p style="text-align: center; color: #BF4B96; font-size: 1.2rem;">
+        💎 Smart Edition | 🤖 AI with Auto Charts | 🚀 Question-Based Visualization
+    </p>
+    """, unsafe_allow_html=True)
     
-    # Check backend status
-    try:
-        status_response = requests.get(f"{API_URL.replace('/api', '')}")
-        if status_response.status_code == 200:
-            status_data = status_response.json()
-            st.success(f"✅ Connected | LLM: {status_data.get('llm_provider', 'Unknown')} ({status_data.get('model', 'Unknown')})")
-        else:
-            st.warning("⚠️ Backend connection issue")
-    except:
-        st.error("❌ Cannot connect to backend. Make sure it's running on http://localhost:8000")
+    if not check_backend():
+        st.error("❌ Backend not running. Start: `python backend.py`")
         return
     
-    # Initialize session state
-    if 'dataset_id' not in st.session_state:
-        st.session_state.dataset_id = None
-    if 'metadata' not in st.session_state:
-        st.session_state.metadata = None
-    if 'insights' not in st.session_state:
-        st.session_state.insights = []
-    if 'chat_history' not in st.session_state:
-        st.session_state.chat_history = []
-    if 'quality_score' not in st.session_state:
-        st.session_state.quality_score = None
-    if 'suggested_questions' not in st.session_state:
-        st.session_state.suggested_questions = []
+    st.success("✅ Connected")
     
     # ========================================================================
     # SIDEBAR
     # ========================================================================
     with st.sidebar:
-        st.header("📁 Data Management")
+        st.markdown("## ⚙️ Settings")
         
-        # Tab for Upload vs Sample Data
-        upload_tab, sample_tab = st.tabs(["📤 Upload", "🎲 Samples"])
+        # Theme Toggle
+        st.markdown("### 🎨 Theme")
+        col_t1, col_t2 = st.columns(2)
+        with col_t1:
+            if st.button("🌙 Dark", use_container_width=True):
+                st.session_state.theme = 'dark'
+                st.rerun()
+        with col_t2:
+            if st.button("☀️ Light", use_container_width=True):
+                st.session_state.theme = 'light'
+                st.rerun()
         
-        with upload_tab:
+        st.caption(f"**{st.session_state.theme.title()} Mode**")
+        st.divider()
+        
+        # Upload
+        st.markdown("### 📁 Data Source")
+        
+        data_source = st.radio(
+            "Choose:",
+            ["📤 Upload", "🎲 Sample"],
+            label_visibility="collapsed"
+        )
+        
+        if data_source == "📤 Upload":
             uploaded_file = st.file_uploader(
-                "Choose a file",
-                type=['csv', 'xlsx', 'xls', 'json', 'parquet', 'txt', 'tsv'],
-                help="Supported formats: CSV, Excel, JSON, Parquet, TSV"
+                "Upload file",
+                type=['csv', 'xlsx', 'json'],
+                label_visibility="collapsed"
             )
             
-            if uploaded_file:
-                with st.spinner("🔄 Processing your data..."):
+            if uploaded_file and st.session_state.last_uploaded != uploaded_file.name:
+                with st.spinner("🔄 Processing..."):
                     try:
-                        files = {'file': (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
-                        response = requests.post(f"{API_URL}/upload/file", files=files)
+                        files = {'file': (uploaded_file.name, uploaded_file.getvalue())}
+                        response = requests.post(f"{API_URL}/upload", files=files)
                         
                         if response.status_code == 200:
                             data = response.json()
+                            
                             st.session_state.dataset_id = data['dataset_id']
                             st.session_state.metadata = data['metadata']
-                            st.session_state.insights = data['insights']
-                            st.session_state.sample_data = data['sample_data']
-                            st.session_state.cleaning_report = data['clean_report']
                             st.session_state.quality_score = data['quality_score']
-                            st.session_state.suggested_questions = data['suggested_questions']
+                            st.session_state.summary = data['summary']
+                            st.session_state.suggestions = data['suggestions']
+                            st.session_state.sample_data = pd.DataFrame(data['sample'])
+                            st.session_state.auto_charts = data['auto_charts']
+                            st.session_state.last_uploaded = uploaded_file.name
                             
                             st.success(f"✅ {data['filename']}")
-                            
-                            # Quick stats
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.metric("Rows", f"{data['metadata']['rows']:,}")
-                            with col2:
-                                st.metric("Columns", data['metadata']['columns'])
-                            
-                            # Cleaning report
-                            with st.expander("🧹 Cleaning Report"):
-                                for step in data['clean_report']['steps_performed']:
-                                    st.write(f"✓ {step}")
-                        else:
-                            st.error(f"Error: {response.json().get('detail', 'Unknown error')}")
-                    
+                            st.toast("🎉 Data loaded!", icon="📊")
                     except Exception as e:
-                        st.error(f"Error: {str(e)}")
+                        st.error(f"Error: {e}")
         
-        with sample_tab:
-            st.markdown("### 🎲 Load Sample Dataset")
-            
+        else:  # Sample
             try:
-                samples_response = requests.get(f"{API_URL}/samples")
-                if samples_response.status_code == 200:
-                    samples = samples_response.json()['samples']
-                    
+                response = requests.get(f"{API_URL}/samples")
+                if response.status_code == 200:
+                    samples = response.json()['samples']
                     for sample in samples:
-                        with st.expander(f"📊 {sample['name']}"):
-                            st.write(sample['description'])
-                            st.write(f"**Rows:** {sample['rows']}")
-                            st.write(f"**Columns:** {sample['columns']}")
-                            
-                            if st.button(f"Load {sample['name']}", key=f"load_{sample['id']}"):
-                                with st.spinner("Loading sample..."):
-                                    load_response = requests.post(f"{API_URL}/samples/{sample['id']}")
-                                    if load_response.status_code == 200:
-                                        data = load_response.json()
-                                        st.session_state.dataset_id = data['dataset_id']
-                                        st.session_state.metadata = data['metadata']
-                                        st.session_state.insights = data['insights']
-                                        st.session_state.sample_data = data['sample_data']
-                                        st.session_state.quality_score = data['quality_score']
-                                        st.session_state.suggested_questions = data['suggested_questions']
-                                        st.success("✅ Sample loaded!")
-                                        st.rerun()
+                        if st.button(f"📊 {sample['name']}", key=sample['id'], use_container_width=True):
+                            with st.spinner("Loading..."):
+                                load_response = requests.post(f"{API_URL}/samples/{sample['id']}")
+                                if load_response.status_code == 200:
+                                    data = load_response.json()
+                                    
+                                    st.session_state.dataset_id = data['dataset_id']
+                                    st.session_state.metadata = data['metadata']
+                                    st.session_state.quality_score = data['quality_score']
+                                    st.session_state.summary = data['summary']
+                                    st.session_state.suggestions = data['suggestions']
+                                    st.session_state.sample_data = pd.DataFrame(data['sample'])
+                                    st.session_state.auto_charts = data['auto_charts']
+                                    st.session_state.last_uploaded = None
+                                    
+                                    st.success("✅ Sample loaded!")
+                                    st.rerun()
             except:
                 st.error("Could not load samples")
         
-        st.markdown("---")
-        
-        # Export section
+        # Export
         if st.session_state.dataset_id:
-            st.markdown("### 💾 Export Data")
+            st.divider()
+            st.markdown("### 📥 Export")
             
-            col1, col2 = st.columns(2)
+            if st.button("📄 PDF Report", use_container_width=True):
+                try:
+                    response = requests.get(f"{API_URL}/export/pdf/{st.session_state.dataset_id}")
+                    if response.status_code == 200:
+                        st.download_button(
+                            "💾 Download PDF",
+                            response.content,
+                            f"report_{datetime.now().strftime('%Y%m%d')}.pdf",
+                            "application/pdf",
+                            use_container_width=True
+                        )
+                except Exception as e:
+                    st.error(f"Error: {e}")
             
-            with col1:
-                if st.button("📄 PDF", use_container_width=True):
-                    with st.spinner("Generating..."):
-                        pdf_content = download_file(st.session_state.dataset_id, "pdf")
-                        if pdf_content:
-                            st.download_button(
-                                "💾 Save PDF",
-                                pdf_content,
-                                f"report_{time.strftime('%Y%m%d')}.pdf",
-                                "application/pdf",
-                                use_container_width=True
-                            )
-                
+            col_e1, col_e2 = st.columns(2)
+            with col_e1:
                 if st.button("📊 Excel", use_container_width=True):
-                    with st.spinner("Generating..."):
-                        excel_content = download_file(st.session_state.dataset_id, "excel")
-                        if excel_content:
+                    try:
+                        response = requests.get(f"{API_URL}/export/excel/{st.session_state.dataset_id}")
+                        if response.status_code == 200:
                             st.download_button(
-                                "💾 Save Excel",
-                                excel_content,
-                                f"data_{time.strftime('%Y%m%d')}.xlsx",
-                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                "💾 Excel",
+                                response.content,
+                                f"data_{datetime.now().strftime('%Y%m%d')}.xlsx",
                                 use_container_width=True
                             )
+                    except:
+                        pass
             
-            with col2:
+            with col_e2:
                 if st.button("📝 CSV", use_container_width=True):
-                    with st.spinner("Generating..."):
-                        csv_content = download_file(st.session_state.dataset_id, "csv")
-                        if csv_content:
+                    try:
+                        response = requests.get(f"{API_URL}/export/csv/{st.session_state.dataset_id}")
+                        if response.status_code == 200:
                             st.download_button(
-                                "💾 Save CSV",
-                                csv_content,
-                                f"data_{time.strftime('%Y%m%d')}.csv",
-                                "text/csv",
+                                "💾 CSV",
+                                response.content,
+                                f"data_{datetime.now().strftime('%Y%m%d')}.csv",
                                 use_container_width=True
                             )
-                
-                if st.button("🔧 JSON", use_container_width=True):
-                    with st.spinner("Generating..."):
-                        json_content = download_file(st.session_state.dataset_id, "json")
-                        if json_content:
-                            st.download_button(
-                                "💾 Save JSON",
-                                json_content,
-                                f"data_{time.strftime('%Y%m%d')}.json",
-                                "application/json",
-                                use_container_width=True
-                            )
+                    except:
+                        pass
             
-            st.markdown("---")
+            st.divider()
             
-            if st.button("🗑️ Clear Dataset", use_container_width=True):
-                st.session_state.dataset_id = None
-                st.session_state.metadata = None
-                st.session_state.insights = []
-                st.session_state.chat_history = []
-                st.session_state.quality_score = None
-                st.session_state.suggested_questions = []
+            if st.button("🗑️ Clear Data", use_container_width=True):
+                for key in list(st.session_state.keys()):
+                    del st.session_state[key]
                 st.rerun()
-# Continuing from Part 1...
-
+        
+        st.divider()
+        
+        with st.expander("ℹ️ About"):
+            st.markdown(f"""
+            **Version:** 3.0 Smart Edition  
+            **Theme:** {st.session_state.theme.title()}  
+            
+            **✨ Smart Features:**
+            - 🤖 AI auto-generates charts based on questions
+            - 📊 Top/Most → Bar chart
+            - 📈 Trend/Over time → Line chart
+            - 📉 Distribution → Histogram
+            - 🎨 Custom chart builder
+            """)
+    
     # ========================================================================
     # MAIN CONTENT
     # ========================================================================
     
     if st.session_state.dataset_id:
-        # Create tabs
-        tab1, tab2, tab3, tab4 = st.tabs([
-            "💡 Auto Insights", 
-            "💬 Ask Questions", 
-            "📊 Data Explorer",
-            "🔍 Column Analysis"
+        # Quick Stats
+        st.markdown("### 📊 Dataset Overview")
+        col1, col2, col3, col4, col5 = st.columns(5)
+        
+        with col1:
+            st.metric("📊 Rows", f"{st.session_state.metadata['rows']:,}")
+        with col2:
+            st.metric("📋 Columns", st.session_state.metadata['columns'])
+        with col3:
+            st.metric("🔢 Numeric", len(st.session_state.metadata['numeric_columns']))
+        with col4:
+            st.metric("📝 Text", len(st.session_state.metadata['categorical_columns']))
+        with col5:
+            st.metric("🏆 Quality", f"{st.session_state.quality_score['overall']}%")
+        
+        st.divider()
+        
+        # Summary
+        if st.session_state.summary:
+            st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                        padding: 20px; border-radius: 12px; color: white; margin: 20px 0;">
+                <h3 style="color: white;">📊 Executive Summary</h3>
+                <p style="font-size: 1rem; line-height: 1.6;">{st.session_state.summary}</p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        # Tabs - AI ANALYSIS FIRST!
+        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+            "🔍 AI Analysis",
+            "📊 Auto Charts",
+            "🎨 Chart Builder",
+            "📈 Data View",
+            "🎯 Insights"
         ])
         
         # ====================================================================
-        # TAB 1: AUTO INSIGHTS (Enhanced)
+        # TAB 1: AI ANALYSIS (FIRST TAB!)
         # ====================================================================
         with tab1:
-            st.markdown('<div class="content-container">', unsafe_allow_html=True)
+            st.markdown("### 💬 Ask Questions - Get Answers + Charts")
+            st.caption("AI automatically generates suitable visualizations based on your questions")
             
-            st.header("🔍 Automated Insights")
-            
-            # Quality Score Badge
-            if st.session_state.quality_score:
-                display_quality_badge(
-                    st.session_state.quality_score['overall'],
-                    st.session_state.quality_score['grade']
-                )
-                
-                # Detailed quality metrics
-                st.markdown("### 📊 Quality Breakdown")
-                
-                col1, col2, col3, col4 = st.columns(4)
-                
-                with col1:
-                    st.metric(
-                        "Completeness", 
-                        f"{st.session_state.quality_score['completeness']:.1f}%",
-                        help="Percentage of non-missing values"
-                    )
-                
-                with col2:
-                    st.metric(
-                        "Uniqueness", 
-                        f"{st.session_state.quality_score['uniqueness']:.1f}%",
-                        help="Percentage of non-duplicate rows"
-                    )
-                
-                with col3:
-                    st.metric(
-                        "Consistency", 
-                        f"{st.session_state.quality_score['consistency']:.1f}%",
-                        help="Data type consistency"
-                    )
-                
-                with col4:
-                    st.metric(
-                        "Validity", 
-                        f"{st.session_state.quality_score['validity']:.1f}%",
-                        help="Outlier detection score"
-                    )
-            
-            st.markdown("---")
-            
-            # Summary metrics with gradient cards
-            if st.session_state.metadata:
-                col1, col2, col3, col4 = st.columns(4)
-                
-                with col1:
-                    display_metric_card("Total Rows", f"{st.session_state.metadata['rows']:,}")
-                
-                with col2:
-                    display_metric_card("Columns", st.session_state.metadata['columns'])
-                
-                with col3:
-                    display_metric_card("Numeric", len(st.session_state.metadata['numeric_columns']))
-                
-                with col4:
-                    display_metric_card("Categorical", len(st.session_state.metadata['categorical_columns']))
-            
-            st.markdown("---")
-            
-            # Animated insights
-            if st.session_state.insights:
-                st.markdown("### 💡 Key Insights")
-                
-                for idx, insight in enumerate(st.session_state.insights):
-                    st.markdown(f"""
-                    <div class="insight-card" style="animation-delay: {idx * 0.1}s;">
-                        <p><strong>{idx + 1}.</strong> {insight}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-            
-            st.markdown("---")
-            
-            # Suggested charts
-            st.header("📈 Suggested Visualizations")
-            
-            with st.spinner("Loading chart suggestions..."):
-                try:
-                    response = requests.get(f"{API_URL}/chart/suggest/{st.session_state.dataset_id}")
-                    
-                    if response.status_code == 200:
-                        charts_data = response.json()
-                        suggestions = charts_data.get('suggestions', [])
-                        
-                        if suggestions:
-                            for idx, suggestion in enumerate(suggestions):
-                                with st.expander(f"📊 {suggestion.get('description', f'Chart {idx+1}')}"):
-                                    col1, col2 = st.columns([3, 1])
-                                    
-                                    with col1:
-                                        st.write(f"**Type:** {suggestion.get('type').title()}")
-                                        st.write(f"**X:** {suggestion.get('x')}")
-                                        if suggestion.get('y'):
-                                            st.write(f"**Y:** {suggestion.get('y')}")
-                                    
-                                    with col2:
-                                        if st.button("Generate", key=f"gen_chart_{idx}"):
-                                            with st.spinner("Creating chart..."):
-                                                chart_response = requests.post(
-                                                    f"{API_URL}/chart",
-                                                    json={
-                                                        'dataset_id': st.session_state.dataset_id,
-                                                        'chart_type': suggestion.get('type'),
-                                                        'x_column': suggestion.get('x'),
-                                                        'y_column': suggestion.get('y')
-                                                    }
-                                                )
-                                                
-                                                if chart_response.status_code == 200:
-                                                    chart_result = chart_response.json()
-                                                    if chart_result.get('success'):
-                                                        render_chart(chart_result['chart_json'])
-                        else:
-                            st.info("No chart suggestions available")
-                
-                except Exception as e:
-                    st.error(f"Error loading charts: {e}")
-            
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        # ====================================================================
-        # TAB 2: ASK QUESTIONS (Enhanced with Auto-Suggestions)
-        # ====================================================================
-        with tab2:
-            st.markdown('<div class="content-container">', unsafe_allow_html=True)
-            
-            st.header("💬 Ask Anything About Your Data")
-            
-            # Display auto-suggested questions prominently
-            if st.session_state.suggested_questions:
-                st.markdown("### ✨ Suggested Questions (Click to Ask)")
-                st.markdown("*AI-generated questions based on your data*")
-                
-                for idx, question in enumerate(st.session_state.suggested_questions):
-                    col1, col2 = st.columns([6, 1])
-                    
-                    with col1:
-                        st.markdown(f"""
-                        <div class="suggested-question">
-                            <strong>💡 {idx + 1}.</strong> {question}
-                        </div>
-                        """, unsafe_allow_html=True)
-                    
-                    with col2:
-                        if st.button("Ask", key=f"ask_suggestion_{idx}"):
-                            # Auto-submit the question
-                            with st.spinner("🤔 Analyzing..."):
-                                try:
-                                    response = requests.post(
-                                        f"{API_URL}/query",
-                                        json={
-                                            'dataset_id': st.session_state.dataset_id,
-                                            'question': question
-                                        }
-                                    )
-                                    
-                                    if response.status_code == 200:
-                                        result = response.json()
-                                        answer = result['result']['answer']
+            # Suggested Questions
+            if st.session_state.suggestions:
+                with st.expander("💡 Suggested Questions", expanded=True):
+                    cols = st.columns(2)
+                    for idx, suggestion in enumerate(st.session_state.suggestions):
+                        with cols[idx % 2]:
+                            if st.button(f"💡 {suggestion}", key=f"sug_{idx}", use_container_width=True):
+                                with st.spinner("🤖 Analyzing and generating chart..."):
+                                    try:
+                                        response = requests.post(
+                                            f"{API_URL}/query",
+                                            json={
+                                                'dataset_id': st.session_state.dataset_id,
+                                                'question': suggestion
+                                            }
+                                        )
                                         
-                                        st.session_state.chat_history.append({
-                                            'query': question,
-                                            'response': answer
-                                        })
-                                        
-                                        st.rerun()
-                                
-                                except Exception as e:
-                                    st.error(f"Error: {str(e)}")
-                
-                st.markdown("---")
+                                        if response.status_code == 200:
+                                            result = response.json()
+                                            
+                                            st.session_state.chat_history.append({
+                                                'question': suggestion,
+                                                'answer': result['answer'],
+                                                'chart_data': result.get('chart_data')
+                                            })
+                                            
+                                            st.toast("✅ Analysis complete with chart!", icon="📊")
+                                            st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Error: {e}")
             
-            # Manual refresh suggestions
-            if st.button("🔄 Refresh Suggestions"):
-                with st.spinner("Generating new suggestions..."):
-                    try:
-                        response = requests.get(f"{API_URL}/suggest/{st.session_state.dataset_id}")
-                        if response.status_code == 200:
-                            st.session_state.suggested_questions = response.json()['suggestions']
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"Error: {e}")
+            st.divider()
             
-            # Example queries
-            with st.expander("💡 More Example Questions"):
-                st.markdown("""
-                - What is the average revenue by month?
-                - Show me the top 10 customers by sales
-                - What's the correlation between price and quantity?
-                - Are there any outliers in the revenue column?
-                - Show month over month growth trend
-                - Compare sales across different regions
-                - What are the key trends in this data?
-                - Which category has the highest sales?
-                """)
-            
-            st.markdown("---")
-            
-            # Chat history display
-            st.markdown("### 💬 Conversation History")
-            
-            chat_container = st.container()
-            with chat_container:
-                for chat in st.session_state.chat_history:
-                    with st.chat_message("user"):
-                        st.write(chat['query'])
-                    
-                    with st.chat_message("assistant"):
-                        st.write(chat['response'])
-                        if chat.get('chart'):
-                            render_chart(chat['chart'])
-            
-            # Clear chat button
+            # Chat History with Charts
             if st.session_state.chat_history:
-                if st.button("🗑️ Clear Chat History"):
+                st.markdown("### 💭 Analysis History")
+                st.caption("Each answer includes a relevant visualization")
+                
+                for i, chat in enumerate(reversed(st.session_state.chat_history[-5:])):
+                    with st.expander(f"❓ {chat['question']}", expanded=(i==0)):
+                        st.markdown("**Answer:**")
+                        st.write(chat['answer'])
+                        
+                        if chat.get('chart_data'):
+                            st.markdown("**📊 Visualization:**")
+                            chart_bytes = base64.b64decode(chat['chart_data'])
+                            st.image(chart_bytes)
+                        else:
+                            st.info("No chart generated for this question")
+                
+                if st.button("🗑️ Clear History", use_container_width=True):
                     st.session_state.chat_history = []
                     st.rerun()
             
-            st.markdown('</div>', unsafe_allow_html=True)
+            else:
+                st.info("💡 Ask a question to see AI-generated answers with charts!")
         
         # ====================================================================
-        # TAB 3: DATA EXPLORER
+        # TAB 2: AUTO CHARTS
+        # ====================================================================
+        with tab2:
+            st.markdown("### 📊 Automatically Generated Visualizations")
+            st.caption("Charts generated on data upload")
+            
+            if st.session_state.auto_charts:
+                cols = st.columns(2)
+                for idx, chart in enumerate(st.session_state.auto_charts):
+                    with cols[idx % 2]:
+                        st.markdown(f"**{chart['title']}**")
+                        chart_bytes = base64.b64decode(chart['data'])
+                        st.image(chart_bytes, use_column_width=True)
+                        st.caption(f"Type: {chart['type'].title()}")
+            else:
+                st.info("No auto charts available")
+        
+        # ====================================================================
+        # TAB 3: CUSTOM CHART BUILDER (FIXED!)
         # ====================================================================
         with tab3:
-            st.markdown('<div class="content-container">', unsafe_allow_html=True)
+            st.markdown("### 🎨 Build Custom Charts")
+            st.caption("Create your own visualizations with custom column selections")
             
-            st.header("📊 Data Explorer")
+            col_c1, col_c2, col_c3 = st.columns(3)
             
-            # Interactive filters
-            st.markdown("### 🔍 Filter Data")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                if st.session_state.metadata['categorical_columns']:
-                    filter_col = st.selectbox(
-                        "Filter by column",
-                        ['None'] + st.session_state.metadata['categorical_columns']
-                    )
-            
-            with col2:
-                if filter_col and filter_col != 'None':
-                    # Get unique values for filtering
-                    st.info("Filter options will appear here")
-            
-            st.markdown("---")
-            
-            # Show sample data
-            st.subheader("📋 Sample Data (First 10 Rows)")
-            if st.session_state.get('sample_data'):
-                df_sample = pd.DataFrame(st.session_state.sample_data)
-                st.dataframe(df_sample, use_container_width=True, height=400)
-            
-            st.markdown("---")
-            
-            # Column information
-            st.subheader("📑 Column Information")
-            if st.session_state.metadata:
-                col_info = []
-                for col, dtype in st.session_state.metadata['column_types'].items():
-                    missing = st.session_state.metadata['missing_values'].get(col, 0)
-                    col_info.append({
-                        'Column': col,
-                        'Type': dtype,
-                        'Missing Values': missing,
-                        'Missing %': f"{(missing / st.session_state.metadata['rows'] * 100):.1f}%"
-                    })
-                
-                st.dataframe(pd.DataFrame(col_info), use_container_width=True)
-            
-            st.markdown("---")
-            
-            # Custom chart builder
-            st.subheader("🎨 Custom Chart Builder")
-            
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
+            with col_c1:
                 chart_type = st.selectbox(
                     "Chart Type",
-                    options=['bar', 'line', 'scatter', 'pie', 'histogram', 'box', 'heatmap']
+                    options=['bar', 'line', 'scatter', 'histogram'],
+                    help="Select the type of chart to generate"
                 )
             
-            with col2:
+            with col_c2:
                 all_columns = list(st.session_state.metadata['column_types'].keys())
-                x_column = st.selectbox("X Column", options=all_columns)
+                x_column = st.selectbox(
+                    "X Column", 
+                    options=all_columns,
+                    help="Select column for X-axis"
+                )
             
-            with col3:
-                if chart_type not in ['pie', 'histogram', 'heatmap']:
+            with col_c3:
+                # Show Y column for all chart types except histogram
+                if chart_type != 'histogram':
                     numeric_cols = st.session_state.metadata['numeric_columns']
-                    y_column = st.selectbox("Y Column", options=numeric_cols if numeric_cols else all_columns)
+                    y_options = numeric_cols if numeric_cols else all_columns
+                    
+                    if y_options:
+                        y_column = st.selectbox(
+                            "Y Column", 
+                            options=y_options,
+                            help="Select column for Y-axis (numeric recommended)"
+                        )
+                    else:
+                        st.warning("No numeric columns available")
+                        y_column = None
                 else:
                     y_column = None
+                    st.info("Histogram only needs X column")
             
-            if st.button("🎨 Generate Custom Chart", use_container_width=True):
-                with st.spinner("Creating chart..."):
-                    try:
-                        response = requests.post(
-                            f"{API_URL}/chart",
-                            json={
-                                'dataset_id': st.session_state.dataset_id,
-                                'chart_type': chart_type,
-                                'x_column': x_column,
-                                'y_column': y_column
-                            }
-                        )
-                        
-                        if response.status_code == 200:
-                            chart_data = response.json()
-                            if chart_data.get('success'):
-                                render_chart(chart_data['chart_json'])
+            # Chart description
+            st.markdown("---")
+            if chart_type == 'bar':
+                st.caption("📊 Bar chart will group by X column and aggregate Y column")
+            elif chart_type == 'line':
+                st.caption("📈 Line chart shows trend of Y over X")
+            elif chart_type == 'scatter':
+                st.caption("📉 Scatter plot shows relationship between X and Y")
+            elif chart_type == 'histogram':
+                st.caption("📊 Histogram shows distribution of X column")
+            
+            if st.button("🎨 Generate Chart", use_container_width=True, type="primary"):
+                # Validate inputs
+                if chart_type != 'histogram' and not y_column:
+                    st.error("⚠️ Please select a Y column for this chart type")
+                else:
+                    with st.spinner("Creating chart..."):
+                        try:
+                            response = requests.post(
+                                f"{API_URL}/chart/custom",
+                                json={
+                                    'dataset_id': st.session_state.dataset_id,
+                                    'chart_type': chart_type,
+                                    'x_column': x_column,
+                                    'y_column': y_column
+                                }
+                            )
+                            
+                            if response.status_code == 200:
+                                result = response.json()
+                                if result['success']:
+                                    st.success("✅ Chart created successfully!")
+                                    chart_bytes = base64.b64decode(result['chart_data'])
+                                    st.image(chart_bytes, use_column_width=True)
+                                else:
+                                    st.error(f"❌ Chart generation failed: {result.get('error', 'Unknown error')}")
                             else:
-                                st.error(chart_data.get('error', 'Could not generate chart'))
-                        else:
-                            st.error("Could not generate chart")
-                    
-                    except Exception as e:
-                        st.error(f"Error: {e}")
-            
-            st.markdown('</div>', unsafe_allow_html=True)
+                                st.error(f"❌ API error: {response.status_code}")
+                        except Exception as e:
+                            st.error(f"❌ Error: {e}")
+                            st.exception(e)
         
         # ====================================================================
-        # TAB 4: COLUMN ANALYSIS (NEW)
+        # TAB 4: DATA VIEW
         # ====================================================================
         with tab4:
-            st.markdown('<div class="content-container">', unsafe_allow_html=True)
+            st.markdown("### 🗂️ Dataset Preview")
             
-            st.header("🔍 Deep Column Analysis")
-            st.markdown("*Analyze individual columns in detail*")
+            if st.session_state.sample_data is not None:
+                num_rows = st.slider("Rows to display", 5, min(50, len(st.session_state.sample_data)), 10)
+                st.dataframe(st.session_state.sample_data.head(num_rows), use_container_width=True, height=400)
             
-            # Column selector
-            selected_column = st.selectbox(
-                "Select a column to analyze",
-                options=list(st.session_state.metadata['column_types'].keys())
-            )
+            st.divider()
             
-            if st.button("🔍 Analyze Column", use_container_width=True):
+            st.markdown("### 📋 Column Information")
+            col_info = []
+            for col, dtype in st.session_state.metadata['column_types'].items():
+                missing = st.session_state.metadata['missing_values'].get(col, 0)
+                col_info.append({
+                    'Column': col,
+                    'Type': dtype,
+                    'Missing': missing,
+                    'Missing %': f"{(missing / st.session_state.metadata['rows'] * 100):.1f}%"
+                })
+            
+            st.dataframe(pd.DataFrame(col_info), use_container_width=True, hide_index=True)
+        
+        # ====================================================================
+        # TAB 5: COLUMN INSIGHTS (FIXED!)
+        # ====================================================================
+        with tab5:
+            st.markdown("### 🎯 Deep Column Analysis")
+            st.caption("Get detailed statistics and insights for any column")
+            
+            col_select1, col_select2 = st.columns([3, 1])
+            
+            with col_select1:
+                selected_column = st.selectbox(
+                    "Select column to analyze:",
+                    options=list(st.session_state.metadata['column_types'].keys()),
+                    help="Choose any column from your dataset"
+                )
+            
+            with col_select2:
+                analyze_btn = st.button("🔍 Analyze", use_container_width=True, type="primary")
+            
+            if analyze_btn:
                 with st.spinner(f"Analyzing {selected_column}..."):
                     try:
                         response = requests.post(
-                            f"{API_URL}/analyze/column",
+                            f"{API_URL}/column-insights",
                             json={
                                 'dataset_id': st.session_state.dataset_id,
                                 'column_name': selected_column
@@ -862,167 +550,144 @@ def main():
                         )
                         
                         if response.status_code == 200:
-                            analysis = response.json()['analysis']
+                            insights = response.json()['insights']
                             
                             st.success(f"✅ Analysis complete for: **{selected_column}**")
                             
-                            # Basic info
+                            st.divider()
+                            
+                            # Basic Info
+                            st.markdown("#### 📋 Basic Information")
                             col1, col2, col3 = st.columns(3)
                             
                             with col1:
-                                st.metric("Data Type", analysis['data_type'])
-                            
+                                st.metric("Data Type", insights['type'])
                             with col2:
-                                st.metric("Total Values", f"{analysis['total_values']:,}")
-                            
+                                st.metric("Total Values", f"{insights['total']:,}")
                             with col3:
-                                st.metric("Missing Values", analysis['missing_values'])
+                                missing_pct = (insights['missing'] / insights['total'] * 100) if insights['total'] > 0 else 0
+                                st.metric("Missing", f"{insights['missing']} ({missing_pct:.1f}%)")
                             
-                            st.metric("Unique Values", f"{analysis['unique_values']:,}")
+                            st.metric("Unique Values", f"{insights['unique']:,}")
                             
-                            st.markdown("---")
+                            st.divider()
                             
-                            # Statistical analysis for numeric columns
-                            if 'mean' in analysis:
-                                st.subheader("📊 Statistical Summary")
+                            # Statistical Analysis for Numeric Columns
+                            if 'mean' in insights:
+                                st.markdown("#### 📊 Statistical Summary")
                                 
-                                col1, col2, col3 = st.columns(3)
+                                col_s1, col_s2, col_s3 = st.columns(3)
                                 
-                                with col1:
-                                    st.metric("Mean", f"{analysis['mean']:.2f}")
-                                    st.metric("Min", f"{analysis['min']:.2f}")
+                                with col_s1:
+                                    st.metric("Mean", f"{insights['mean']:.2f}")
+                                    st.metric("Minimum", f"{insights['min']:.2f}")
                                 
-                                with col2:
-                                    st.metric("Median", f"{analysis['median']:.2f}")
-                                    st.metric("Max", f"{analysis['max']:.2f}")
+                                with col_s2:
+                                    st.metric("Median", f"{insights['median']:.2f}")
+                                    st.metric("Maximum", f"{insights['max']:.2f}")
                                 
-                                with col3:
-                                    st.metric("Std Dev", f"{analysis['std']:.2f}")
+                                with col_s3:
+                                    st.metric("Std Deviation", f"{insights['std']:.2f}")
+                                    range_val = insights['max'] - insights['min']
+                                    st.metric("Range", f"{range_val:.2f}")
                                 
-                                # Quartiles
-                                st.markdown("#### Quartiles")
-                                quartile_col1, quartile_col2, quartile_col3 = st.columns(3)
-                                
-                                with quartile_col1:
-                                    st.metric("Q1 (25%)", f"{analysis['quartiles']['Q1']:.2f}")
-                                
-                                with quartile_col2:
-                                    st.metric("Q2 (50%)", f"{analysis['quartiles']['Q2']:.2f}")
-                                
-                                with quartile_col3:
-                                    st.metric("Q3 (75%)", f"{analysis['quartiles']['Q3']:.2f}")
+                                # Statistical interpretation
+                                st.info(f"""
+                                **📈 Interpretation:**
+                                - **Range:** {insights['min']:.2f} to {insights['max']:.2f}
+                                - **Average:** {insights['mean']:.2f}
+                                - **Spread (Std Dev):** {insights['std']:.2f}
+                                - **Middle Value:** {insights['median']:.2f}
+                                """)
                             
-                            # Top values for categorical columns
-                            elif 'top_values' in analysis:
-                                st.subheader("🏆 Top Values")
+                            # Top Values for Categorical Columns
+                            elif 'top_values' in insights:
+                                st.markdown("#### 🏆 Top Values Distribution")
                                 
-                                top_values_df = pd.DataFrame([
-                                    {'Value': k, 'Count': v}
-                                    for k, v in analysis['top_values'].items()
+                                top_df = pd.DataFrame([
+                                    {
+                                        'Value': k, 
+                                        'Count': v,
+                                        'Percentage': f"{(v / insights['total'] * 100):.1f}%"
+                                    }
+                                    for k, v in insights['top_values'].items()
                                 ])
                                 
-                                st.dataframe(top_values_df, use_container_width=True)
+                                st.dataframe(top_df, use_container_width=True, hide_index=True)
+                                
+                                st.divider()
+                                
+                                # Visual representation
+                                st.markdown("**📊 Visual Distribution:**")
+                                for idx, row in top_df.iterrows():
+                                    percentage = (row['Count'] / insights['total'] * 100)
+                                    st.progress(percentage / 100, text=f"{row['Value']}: {row['Count']} ({percentage:.1f}%)")
                         
                         else:
-                            st.error("Could not analyze column")
-                    
+                            st.error(f"❌ API returned error: {response.status_code}")
+                            
                     except Exception as e:
-                        st.error(f"Error: {e}")
+                        st.error(f"❌ Error analyzing column: {e}")
+                        st.exception(e)
             
-            st.markdown('</div>', unsafe_allow_html=True)
+            else:
+                st.info("👆 Select a column and click 'Analyze' to see detailed insights")
         
         # ====================================================================
-        # CHAT INPUT (Outside tabs - Important for Streamlit)
+        # CHAT INPUT (Outside tabs - Main feature)
         # ====================================================================
-        st.markdown("---")
-        st.markdown("### 💬 Ask a Question")
-        user_query = st.chat_input("Type your question here...")
+        st.divider()
+        st.markdown("### 💬 Ask Your Own Question")
+        st.caption("Type any question - AI will provide answer + relevant chart")
         
-        if user_query:
-            with st.spinner("🤔 Analyzing..."):
+        user_question = st.chat_input("💬 e.g., 'What are the top 5 products by sales?'")
+        
+        if user_question:
+            with st.spinner("🤖 Analyzing and generating visualization..."):
                 try:
                     response = requests.post(
                         f"{API_URL}/query",
                         json={
                             'dataset_id': st.session_state.dataset_id,
-                            'question': user_query
+                            'question': user_question
                         }
                     )
                     
                     if response.status_code == 200:
                         result = response.json()
-                        answer = result['result']['answer']
                         
                         st.session_state.chat_history.append({
-                            'query': user_query,
-                            'response': answer
+                            'question': user_question,
+                            'answer': result['answer'],
+                            'chart_data': result.get('chart_data')
                         })
                         
+                        st.toast("✅ Done! Check AI Analysis tab", icon="📊")
                         st.rerun()
-                    else:
-                        st.error("Sorry, I couldn't process that question.")
-                
                 except Exception as e:
-                    st.error(f"Error: {str(e)}")
+                    st.error(f"Error: {e}")
     
     else:
-        # ====================================================================
-        # WELCOME SCREEN (Enhanced)
-        # ====================================================================
-        st.markdown('<div class="content-container">', unsafe_allow_html=True)
-        
-        st.markdown("## 👋 Welcome to AI Data Analytics Platform!")
-        
+        # Welcome Screen
         st.markdown("""
-        ### 🚀 Get Started in 3 Steps
-        
-        1. **📁 Upload Your Data** - Support for CSV, Excel, JSON, and more
-        2. **💡 Get AI Insights** - Automatic analysis and suggestions
-        3. **💬 Ask Questions** - Natural language queries powered by AI
-        
-        ---
-        
-        ### ✨ New Features
-        """)
+        <div style="text-align: center; padding: 50px;">
+            <h2>👋 Welcome!</h2>
+            <p style="font-size: 1.2rem; color: #BF4B96;">
+                Upload data to get AI-powered insights with automatic chart generation
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
         
         col1, col2, col3 = st.columns(3)
-        
         with col1:
-            st.markdown("""
-            #### 🎯 Smart Features
-            - ✨ Auto-suggested questions
-            - 🎪 Data quality scoring
-            - 🔍 Column-specific analysis
-            - 🎲 Sample datasets
-            """)
-        
+            st.markdown("### 🤖 Smart AI")
+            st.write("Ask questions → Get answers + charts")
         with col2:
-            st.markdown("""
-            #### 🎨 Rich UI
-            - 🌈 Animated gradients
-            - 🎬 Smooth transitions
-            - 💫 Interactive cards
-            - 📊 Beautiful charts
-            """)
-        
+            st.markdown("### 📊 Auto Charts")
+            st.write("Instant visualizations on upload")
         with col3:
-            st.markdown("""
-            #### 💾 Export Options
-            - 📄 PDF Reports
-            - 📊 Excel Files
-            - 📝 CSV Export
-            - 🔧 JSON Format
-            """)
-        
-        st.markdown("---")
-        
-        st.info("👈 **Start by uploading a file or selecting a sample dataset from the sidebar!**")
-        
-        st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown("### 🎨 Custom Builder")
+            st.write("Create your own charts")
 
-# ============================================================================
-# RUN APP
-# ============================================================================
 if __name__ == "__main__":
     main()
-
