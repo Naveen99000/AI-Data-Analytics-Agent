@@ -1,11 +1,11 @@
 """
-AI Data Analytics Backend - With Multi-LLM Support + PDF Export
-Supports: Groq, OpenAI, Gemini, Grok/xAI
+AI Data Analytics Backend - Enhanced Version
+Features: Multiple exports, data quality score, column analysis, sample datasets
 """
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Dict, Any, List, Optional
 from pathlib import Path
@@ -18,6 +18,7 @@ import json
 import os
 import uuid
 import re
+import io
 import plotly.graph_objects as go
 import plotly.express as px
 
@@ -28,7 +29,6 @@ from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, Image
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
-import io
 import tempfile
 
 # Multi-LLM Support
@@ -43,7 +43,6 @@ load_dotenv()
 # ============================================================================
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq").lower()
 
-# Initialize clients based on provider
 groq_client = None
 gemini_model = None
 openai_client = None
@@ -73,7 +72,7 @@ elif LLM_PROVIDER == "openai":
     else:
         print("⚠️ OPENAI_API_KEY not found")
 
-elif LLM_PROVIDER == "xai":  # Grok
+elif LLM_PROVIDER == "xai":
     xai_api_key = os.getenv("XAI_API_KEY")
     if xai_api_key:
         openai_client = openai.OpenAI(
@@ -85,20 +84,55 @@ elif LLM_PROVIDER == "xai":  # Grok
         print("⚠️ XAI_API_KEY not found")
 
 # ============================================================================
-# GLOBAL STORAGE
+# GLOBAL STORAGE & SAMPLE DATASETS
 # ============================================================================
 DATASETS = {}
+
+SAMPLE_DATASETS = {
+    "sales": {
+        "name": "E-commerce Sales Data",
+        "description": "Sample sales dataset with orders, customers, and products",
+        "data": pd.DataFrame({
+            'order_id': range(1, 101),
+            'customer_name': [f'Customer_{i}' for i in range(1, 101)],
+            'product': np.random.choice(['Laptop', 'Phone', 'Tablet', 'Monitor'], 100),
+            'quantity': np.random.randint(1, 5, 100),
+            'price': np.random.uniform(100, 2000, 100).round(2),
+            'date': pd.date_range('2024-01-01', periods=100, freq='D')
+        })
+    },
+    "hr": {
+        "name": "HR Employee Data",
+        "description": "Sample HR dataset with employee information",
+        "data": pd.DataFrame({
+            'employee_id': range(1, 51),
+            'name': [f'Employee_{i}' for i in range(1, 51)],
+            'department': np.random.choice(['Sales', 'IT', 'HR', 'Finance'], 50),
+            'salary': np.random.randint(40000, 120000, 50),
+            'years_experience': np.random.randint(1, 20, 50),
+            'rating': np.random.uniform(3.0, 5.0, 50).round(1)
+        })
+    },
+    "finance": {
+        "name": "Financial Transactions",
+        "description": "Sample financial transaction data",
+        "data": pd.DataFrame({
+            'transaction_id': range(1, 201),
+            'account': [f'ACC_{i:04d}' for i in range(1, 201)],
+            'type': np.random.choice(['Debit', 'Credit'], 200),
+            'amount': np.random.uniform(10, 5000, 200).round(2),
+            'category': np.random.choice(['Food', 'Transport', 'Shopping', 'Bills'], 200),
+            'date': pd.date_range('2024-01-01', periods=200, freq='H')
+        })
+    }
+}
 
 # ============================================================================
 # UNIVERSAL LLM CALLER
 # ============================================================================
 class UniversalLLM:
-    """Universal LLM interface supporting multiple providers"""
-    
     @staticmethod
     def chat_completion(messages: List[Dict[str, str]], temperature: float = 0.7, max_tokens: int = 1000) -> str:
-        """Universal chat completion across all providers"""
-        
         try:
             if LLM_PROVIDER == "groq" and groq_client:
                 response = groq_client.chat.completions.create(
@@ -110,7 +144,6 @@ class UniversalLLM:
                 return response.choices[0].message.content
             
             elif LLM_PROVIDER == "gemini" and gemini_model:
-                # Convert messages to Gemini format
                 prompt = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
                 response = gemini_model.generate_content(prompt)
                 return response.text
@@ -124,7 +157,7 @@ class UniversalLLM:
                 )
                 return response.choices[0].message.content
             
-            elif LLM_PROVIDER == "xai" and openai_client:  # Grok
+            elif LLM_PROVIDER == "xai" and openai_client:
                 response = openai_client.chat.completions.create(
                     model=MODEL_NAME,
                     messages=messages,
@@ -143,8 +176,6 @@ class UniversalLLM:
 # FILE PARSER
 # ============================================================================
 class FileParser:
-    """Parse any data format into DataFrame"""
-    
     SUPPORTED_FORMATS = {'.csv', '.xlsx', '.xls', '.json', '.parquet', '.txt', '.tsv'}
     
     @staticmethod
@@ -200,16 +231,16 @@ class FileParser:
             raise ValueError("Unsupported JSON structure")
 
 # ============================================================================
-# DATA PROCESSOR
+# DATA PROCESSOR (Enhanced)
 # ============================================================================
 class DataProcessor:
-    """Clean, transform, and prepare data for analysis"""
-    
     def __init__(self, df: pd.DataFrame):
         self.df = df.copy()
         self.original_df = df.copy()
         self.metadata = {}
+        self.quality_score = {}
         self.analyze_data()
+        self.calculate_quality_score()
     
     def analyze_data(self):
         self.metadata = {
@@ -221,6 +252,71 @@ class DataProcessor:
             'categorical_columns': self.df.select_dtypes(include=['object']).columns.tolist(),
             'datetime_columns': self.df.select_dtypes(include=['datetime']).columns.tolist(),
         }
+    
+    def calculate_quality_score(self) -> Dict[str, Any]:
+        """Calculate data quality score"""
+        scores = []
+        
+        # 1. Completeness (0-100)
+        total_cells = self.df.shape[0] * self.df.shape[1]
+        missing_cells = self.df.isnull().sum().sum()
+        completeness = ((total_cells - missing_cells) / total_cells) * 100 if total_cells > 0 else 0
+        scores.append(completeness)
+        
+        # 2. Uniqueness (0-100) - Check for duplicates
+        uniqueness = ((len(self.df) - self.df.duplicated().sum()) / len(self.df)) * 100 if len(self.df) > 0 else 0
+        scores.append(uniqueness)
+        
+        # 3. Consistency (0-100) - Check data types consistency
+        consistency = 100  # Default
+        for col in self.df.columns:
+            if self.df[col].dtype == 'object':
+                # Check if numeric values are stored as strings
+                try:
+                    pd.to_numeric(self.df[col], errors='raise')
+                    consistency -= 10  # Penalty for type inconsistency
+                except:
+                    pass
+        consistency = max(0, consistency)
+        scores.append(consistency)
+        
+        # 4. Validity (0-100) - Check for outliers in numeric columns
+        validity = 100
+        for col in self.metadata['numeric_columns']:
+            Q1 = self.df[col].quantile(0.25)
+            Q3 = self.df[col].quantile(0.75)
+            IQR = Q3 - Q1
+            outliers = ((self.df[col] < (Q1 - 1.5 * IQR)) | (self.df[col] > (Q3 + 1.5 * IQR))).sum()
+            if outliers > len(self.df) * 0.05:  # More than 5% outliers
+                validity -= 5
+        validity = max(0, validity)
+        scores.append(validity)
+        
+        # Overall score
+        overall_score = sum(scores) / len(scores)
+        
+        self.quality_score = {
+            'overall': round(overall_score, 2),
+            'completeness': round(completeness, 2),
+            'uniqueness': round(uniqueness, 2),
+            'consistency': round(consistency, 2),
+            'validity': round(validity, 2),
+            'grade': self._get_grade(overall_score)
+        }
+        
+        return self.quality_score
+    
+    def _get_grade(self, score: float) -> str:
+        if score >= 90:
+            return 'A+'
+        elif score >= 80:
+            return 'A'
+        elif score >= 70:
+            return 'B'
+        elif score >= 60:
+            return 'C'
+        else:
+            return 'D'
     
     def autoclean(self) -> Dict[str, Any]:
         report = {"steps_performed": [], "rows_before": len(self.df)}
@@ -243,7 +339,7 @@ class DataProcessor:
                     self.df[col].fillna(fill_val, inplace=True)
                 report['steps_performed'].append(f"Filled missing values in {col}")
         
-        # Auto-detect datetime columns (FIXED)
+        # Auto-detect datetime columns
         for col in self.df.select_dtypes(include='object').columns:
             sample = self.df[col].dropna().head(5)
             if len(sample) > 0:
@@ -266,6 +362,7 @@ class DataProcessor:
         
         report["rows_after"] = len(self.df)
         self.analyze_data()
+        self.calculate_quality_score()
         return report
     
     def clean_column_name(self, col: str) -> str:
@@ -273,20 +370,44 @@ class DataProcessor:
         col = re.sub(r'\s+', '_', col)
         return col.lower().strip('_')
     
-    def get_summary_stats(self) -> Dict[str, Any]:
-        stats_df = self.df.describe(include='all')
-        return {
-            'basic_stats': stats_df.to_dict(),
-            'metadata': self.metadata,
-            'sample_data': self.df.head(10).to_dict('records')
+    def analyze_column(self, column_name: str) -> Dict[str, Any]:
+        """Deep analysis of specific column"""
+        if column_name not in self.df.columns:
+            raise ValueError(f"Column '{column_name}' not found")
+        
+        col_data = self.df[column_name]
+        analysis = {
+            'column_name': column_name,
+            'data_type': str(col_data.dtype),
+            'total_values': len(col_data),
+            'missing_values': col_data.isnull().sum(),
+            'unique_values': col_data.nunique(),
         }
+        
+        if col_data.dtype in [np.int64, np.float64]:
+            analysis.update({
+                'min': float(col_data.min()),
+                'max': float(col_data.max()),
+                'mean': float(col_data.mean()),
+                'median': float(col_data.median()),
+                'std': float(col_data.std()),
+                'quartiles': {
+                    'Q1': float(col_data.quantile(0.25)),
+                    'Q2': float(col_data.quantile(0.50)),
+                    'Q3': float(col_data.quantile(0.75))
+                }
+            })
+        else:
+            top_values = col_data.value_counts().head(10).to_dict()
+            analysis['top_values'] = {str(k): int(v) for k, v in top_values.items()}
+        
+        return analysis
+# Continuing from Part 1...
 
 # ============================================================================
-# INSIGHT GENERATOR
+# INSIGHT GENERATOR (Enhanced)
 # ============================================================================
 class InsightGenerator:
-    """Generate automated insights from data"""
-    
     def __init__(self, df: pd.DataFrame, metadata: Dict):
         self.df = df
         self.metadata = metadata
@@ -320,22 +441,16 @@ class InsightGenerator:
         return insights
 
 # ============================================================================
-# AI DATA ANALYST
+# AI DATA ANALYST (Enhanced)
 # ============================================================================
 class AIDataAnalyst:
-    """AI-powered data analysis using LLMs"""
-    
     def __init__(self, df: pd.DataFrame, metadata: Dict):
         self.df = df
         self.metadata = metadata
     
     def analyze_with_ai(self, question: str) -> Dict[str, Any]:
-        """AI-powered analysis"""
-        
-        # Prepare data context (OPTIMIZED - Less data)
         data_context = self._prepare_context()
         
-        # Build prompt
         prompt = f"""You are a data analyst. Analyze this dataset and answer the question.
 
 Dataset Context:
@@ -353,7 +468,6 @@ Provide a clear, concise answer with specific insights."""
             {"role": "user", "content": prompt}
         ]
         
-        # Get AI response (REDUCED max_tokens)
         ai_response = UniversalLLM.chat_completion(messages, temperature=0.7, max_tokens=800)
         
         return {
@@ -363,21 +477,14 @@ Provide a clear, concise answer with specific insights."""
         }
     
     def _prepare_context(self) -> str:
-        """Prepare minimal context to save tokens"""
         ctx = []
         ctx.append(f"Rows: {self.metadata['rows']:,}")
         ctx.append(f"Columns: {self.metadata['columns']}")
-        
-        # Limit to first 3 columns only
         ctx.append(f"Numeric: {', '.join(self.metadata['numeric_columns'][:3])}")
         ctx.append(f"Categorical: {', '.join(self.metadata['categorical_columns'][:3])}")
-        
         return "\n".join(ctx)
     
     def suggest_analysis(self) -> List[str]:
-        """AI suggests analysis ideas"""
-        
-        # Get only first 5 columns to reduce tokens
         cols_sample = list(self.df.columns[:5])
         
         prompt = f"""Based on this dataset, suggest 5 analysis questions.
@@ -393,7 +500,6 @@ Suggest 5 specific questions (be brief)."""
         
         response = UniversalLLM.chat_completion(messages, temperature=0.8, max_tokens=300)
         
-        # Parse response into list
         suggestions = [line.strip() for line in response.split('\n') if line.strip() and not line.strip().startswith('#')]
         return suggestions[:5]
 
@@ -401,40 +507,29 @@ Suggest 5 specific questions (be brief)."""
 # CHART GENERATOR
 # ============================================================================
 class ChartGenerator:
-    """Generate interactive Plotly charts"""
-    
     def __init__(self, df: pd.DataFrame):
         self.df = df
     
     def create_chart(self, chart_type: str, x_col: str, y_col: Optional[str] = None, 
                      color_col: Optional[str] = None) -> Dict[str, Any]:
-        """Create chart based on type and columns"""
-        
         try:
             if chart_type == "bar":
                 fig = px.bar(self.df, x=x_col, y=y_col, color=color_col, title=f"{y_col} by {x_col}")
-            
             elif chart_type == "line":
                 fig = px.line(self.df, x=x_col, y=y_col, color=color_col, title=f"{y_col} over {x_col}")
-            
             elif chart_type == "scatter":
                 fig = px.scatter(self.df, x=x_col, y=y_col, color=color_col, title=f"{y_col} vs {x_col}")
-            
             elif chart_type == "histogram":
                 fig = px.histogram(self.df, x=x_col, color=color_col, title=f"Distribution of {x_col}")
-            
             elif chart_type == "box":
                 fig = px.box(self.df, x=x_col, y=y_col, color=color_col, title=f"{y_col} distribution by {x_col}")
-            
             elif chart_type == "pie":
                 value_counts = self.df[x_col].value_counts()
                 fig = px.pie(values=value_counts.values, names=value_counts.index, title=f"Distribution of {x_col}")
-            
             elif chart_type == "heatmap":
                 numeric_df = self.df.select_dtypes(include=[np.number])
                 corr_matrix = numeric_df.corr()
                 fig = px.imshow(corr_matrix, text_auto=True, title="Correlation Heatmap")
-            
             else:
                 raise ValueError(f"Unsupported chart type: {chart_type}")
             
@@ -451,13 +546,10 @@ class ChartGenerator:
             }
     
     def auto_suggest_charts(self, metadata: Dict) -> List[Dict]:
-        """Suggest appropriate chart types based on data"""
         suggestions = []
-        
         numeric_cols = metadata['numeric_columns']
         categorical_cols = metadata['categorical_columns']
         
-        # Bar charts for categorical vs numeric
         if categorical_cols and numeric_cols:
             suggestions.append({
                 "type": "bar",
@@ -466,7 +558,6 @@ class ChartGenerator:
                 "description": f"Bar chart of {numeric_cols[0]} by {categorical_cols[0]}"
             })
         
-        # Line chart for time series
         datetime_cols = metadata['datetime_columns']
         if datetime_cols and numeric_cols:
             suggestions.append({
@@ -476,7 +567,6 @@ class ChartGenerator:
                 "description": f"Time series of {numeric_cols[0]}"
             })
         
-        # Scatter plot for numeric vs numeric
         if len(numeric_cols) >= 2:
             suggestions.append({
                 "type": "scatter",
@@ -485,7 +575,6 @@ class ChartGenerator:
                 "description": f"Scatter plot of {numeric_cols[1]} vs {numeric_cols[0]}"
             })
         
-        # Histogram for numeric distribution
         if numeric_cols:
             suggestions.append({
                 "type": "histogram",
@@ -493,7 +582,6 @@ class ChartGenerator:
                 "description": f"Distribution of {numeric_cols[0]}"
             })
         
-        # Pie chart for categorical
         if categorical_cols:
             suggestions.append({
                 "type": "pie",
@@ -507,8 +595,6 @@ class ChartGenerator:
 # PDF REPORT GENERATOR
 # ============================================================================
 class PDFReportGenerator:
-    """Generate professional PDF reports"""
-    
     def __init__(self, dataset_id: str):
         self.dataset_id = dataset_id
         self.dataset = DATASETS.get(dataset_id)
@@ -516,18 +602,13 @@ class PDFReportGenerator:
             raise ValueError("Dataset not found")
     
     def generate_report(self) -> str:
-        """Generate comprehensive PDF report"""
-        
-        # Create temp file
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
         pdf_path = temp_file.name
         
-        # Create PDF document
         doc = SimpleDocTemplate(pdf_path, pagesize=letter)
         story = []
         styles = getSampleStyleSheet()
         
-        # Custom styles
         title_style = ParagraphStyle(
             'CustomTitle',
             parent=styles['Heading1'],
@@ -546,7 +627,6 @@ class PDFReportGenerator:
             spaceBefore=12
         )
         
-        # Title
         story.append(Paragraph("Data Analysis Report", title_style))
         story.append(Spacer(1, 0.3*inch))
         
@@ -558,6 +638,7 @@ class PDFReportGenerator:
             ["Total Columns", str(self.dataset['metadata']['columns'])],
             ["Numeric Columns", str(len(self.dataset['metadata']['numeric_columns']))],
             ["Categorical Columns", str(len(self.dataset['metadata']['categorical_columns']))],
+            ["Quality Score", f"{self.dataset['quality_score']['overall']}/100 ({self.dataset['quality_score']['grade']})"],
         ]
         
         overview_table = Table(overview_data, colWidths=[3*inch, 3*inch])
@@ -600,9 +681,7 @@ class PDFReportGenerator:
         ]))
         story.append(sample_table)
         
-        # Build PDF
         doc.build(story)
-        
         return pdf_path
 
 # ============================================================================
@@ -619,10 +698,14 @@ class ChartRequest(BaseModel):
     y_column: Optional[str] = None
     color_column: Optional[str] = None
 
+class ColumnAnalysisRequest(BaseModel):
+    dataset_id: str
+    column_name: str
+
 # ============================================================================
 # FASTAPI APP
 # ============================================================================
-app = FastAPI(title="AI Data Analytics Agent", version="2.0")
+app = FastAPI(title="AI Data Analytics Agent", version="3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -639,46 +722,52 @@ app.add_middleware(
 @app.get("/")
 def read_root():
     return {
-        "message": "AI Data Analytics Agent API",
-        "version": "2.0",
+        "message": "AI Data Analytics Agent API - Enhanced Version",
+        "version": "3.0",
         "llm_provider": LLM_PROVIDER,
         "model": MODEL_NAME,
-        "status": "running"
+        "status": "running",
+        "features": [
+            "Multiple export formats",
+            "Data quality scoring",
+            "Column-specific analysis",
+            "Sample datasets",
+            "Auto-suggested questions"
+        ]
     }
 
 @app.post("/api/upload/file")
 async def upload_file(file: UploadFile = File(...)):
-    """Upload and process data file"""
     try:
-        # Validate file extension
         file_ext = Path(file.filename).suffix.lower()
         if file_ext not in FileParser.SUPPORTED_FORMATS:
             raise HTTPException(400, f"Unsupported file format: {file_ext}")
         
-        # Save file temporarily
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=file_ext)
         temp_file.write(await file.read())
         temp_file.close()
         
-        # Parse file
         df = FileParser.parse_file(temp_file.name)
         os.unlink(temp_file.name)
         
-        # Process data
         processor = DataProcessor(df)
         clean_report = processor.autoclean()
         
-        # Generate insights
         insight_gen = InsightGenerator(processor.df, processor.metadata)
         insights = insight_gen.generate_insights()
         
-        # Store dataset
+        # Auto-generate suggested questions
+        analyst = AIDataAnalyst(processor.df, processor.metadata)
+        suggested_questions = analyst.suggest_analysis()
+        
         dataset_id = str(uuid.uuid4())
         DATASETS[dataset_id] = {
             'filename': file.filename,
             'processor': processor,
             'metadata': processor.metadata,
             'insights': insights,
+            'quality_score': processor.quality_score,
+            'suggested_questions': suggested_questions,
             'upload_time': datetime.now().isoformat()
         }
         
@@ -689,6 +778,8 @@ async def upload_file(file: UploadFile = File(...)):
             "metadata": processor.metadata,
             "clean_report": clean_report,
             "insights": insights,
+            "quality_score": processor.quality_score,
+            "suggested_questions": suggested_questions,
             "sample_data": processor.df.head(10).to_dict('records')
         }
     
@@ -697,7 +788,6 @@ async def upload_file(file: UploadFile = File(...)):
 
 @app.post("/api/query")
 async def query_data(request: QueryRequest):
-    """Ask AI questions about data"""
     try:
         dataset = DATASETS.get(request.dataset_id)
         if not dataset:
@@ -716,18 +806,14 @@ async def query_data(request: QueryRequest):
 
 @app.get("/api/suggest/{dataset_id}")
 async def suggest_questions(dataset_id: str):
-    """AI suggests analysis questions"""
     try:
         dataset = DATASETS.get(dataset_id)
         if not dataset:
             raise HTTPException(404, "Dataset not found")
         
-        analyst = AIDataAnalyst(dataset['processor'].df, dataset['metadata'])
-        suggestions = analyst.suggest_analysis()
-        
         return {
             "success": True,
-            "suggestions": suggestions
+            "suggestions": dataset.get('suggested_questions', [])
         }
     
     except Exception as e:
@@ -735,7 +821,6 @@ async def suggest_questions(dataset_id: str):
 
 @app.post("/api/chart")
 async def create_chart(request: ChartRequest):
-    """Generate interactive chart"""
     try:
         dataset = DATASETS.get(request.dataset_id)
         if not dataset:
@@ -756,7 +841,6 @@ async def create_chart(request: ChartRequest):
 
 @app.get("/api/chart/suggest/{dataset_id}")
 async def suggest_charts(dataset_id: str):
-    """Suggest appropriate charts"""
     try:
         dataset = DATASETS.get(dataset_id)
         if not dataset:
@@ -773,9 +857,105 @@ async def suggest_charts(dataset_id: str):
     except Exception as e:
         raise HTTPException(500, f"Error: {str(e)}")
 
+# NEW: Column-specific analysis
+@app.post("/api/analyze/column")
+async def analyze_column(request: ColumnAnalysisRequest):
+    try:
+        dataset = DATASETS.get(request.dataset_id)
+        if not dataset:
+            raise HTTPException(404, "Dataset not found")
+        
+        analysis = dataset['processor'].analyze_column(request.column_name)
+        
+        return {
+            "success": True,
+            "analysis": analysis
+        }
+    
+    except Exception as e:
+        raise HTTPException(500, f"Error: {str(e)}")
+
+# NEW: Data quality score
+@app.get("/api/quality/{dataset_id}")
+async def get_quality_score(dataset_id: str):
+    try:
+        dataset = DATASETS.get(dataset_id)
+        if not dataset:
+            raise HTTPException(404, "Dataset not found")
+        
+        return {
+            "success": True,
+            "quality_score": dataset['quality_score']
+        }
+    
+    except Exception as e:
+        raise HTTPException(500, f"Error: {str(e)}")
+
+# NEW: Export to Excel
+@app.get("/api/export/excel/{dataset_id}")
+async def export_excel(dataset_id: str):
+    try:
+        dataset = DATASETS.get(dataset_id)
+        if not dataset:
+            raise HTTPException(404, "Dataset not found")
+        
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            dataset['processor'].df.to_excel(writer, sheet_name='Data', index=False)
+        
+        output.seek(0)
+        
+        return StreamingResponse(
+            output,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename=data_{dataset_id}.xlsx"}
+        )
+    
+    except Exception as e:
+        raise HTTPException(500, f"Error: {str(e)}")
+
+# NEW: Export to CSV
+@app.get("/api/export/csv/{dataset_id}")
+async def export_csv(dataset_id: str):
+    try:
+        dataset = DATASETS.get(dataset_id)
+        if not dataset:
+            raise HTTPException(404, "Dataset not found")
+        
+        output = io.StringIO()
+        dataset['processor'].df.to_csv(output, index=False)
+        output.seek(0)
+        
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=data_{dataset_id}.csv"}
+        )
+    
+    except Exception as e:
+        raise HTTPException(500, f"Error: {str(e)}")
+
+# NEW: Export to JSON
+@app.get("/api/export/json/{dataset_id}")
+async def export_json(dataset_id: str):
+    try:
+        dataset = DATASETS.get(dataset_id)
+        if not dataset:
+            raise HTTPException(404, "Dataset not found")
+        
+        json_data = dataset['processor'].df.to_json(orient='records')
+        
+        return StreamingResponse(
+            iter([json_data]),
+            media_type="application/json",
+            headers={"Content-Disposition": f"attachment; filename=data_{dataset_id}.json"}
+        )
+    
+    except Exception as e:
+        raise HTTPException(500, f"Error: {str(e)}")
+
 @app.get("/api/export/pdf/{dataset_id}")
 async def export_pdf(dataset_id: str):
-    """Export analysis report as PDF"""
     try:
         pdf_gen = PDFReportGenerator(dataset_id)
         pdf_path = pdf_gen.generate_report()
@@ -789,9 +969,69 @@ async def export_pdf(dataset_id: str):
     except Exception as e:
         raise HTTPException(500, f"Error: {str(e)}")
 
+# NEW: Get sample datasets
+@app.get("/api/samples")
+async def get_sample_datasets():
+    return {
+        "samples": [
+            {
+                "id": key,
+                "name": value["name"],
+                "description": value["description"],
+                "rows": len(value["data"]),
+                "columns": len(value["data"].columns)
+            }
+            for key, value in SAMPLE_DATASETS.items()
+        ]
+    }
+
+# NEW: Load sample dataset
+@app.post("/api/samples/{sample_id}")
+async def load_sample_dataset(sample_id: str):
+    try:
+        if sample_id not in SAMPLE_DATASETS:
+            raise HTTPException(404, "Sample dataset not found")
+        
+        sample = SAMPLE_DATASETS[sample_id]
+        df = sample["data"].copy()
+        
+        processor = DataProcessor(df)
+        clean_report = processor.autoclean()
+        
+        insight_gen = InsightGenerator(processor.df, processor.metadata)
+        insights = insight_gen.generate_insights()
+        
+        analyst = AIDataAnalyst(processor.df, processor.metadata)
+        suggested_questions = analyst.suggest_analysis()
+        
+        dataset_id = str(uuid.uuid4())
+        DATASETS[dataset_id] = {
+            'filename': f'{sample["name"]}.csv',
+            'processor': processor,
+            'metadata': processor.metadata,
+            'insights': insights,
+            'quality_score': processor.quality_score,
+            'suggested_questions': suggested_questions,
+            'upload_time': datetime.now().isoformat()
+        }
+        
+        return {
+            "success": True,
+            "dataset_id": dataset_id,
+            "filename": sample["name"],
+            "metadata": processor.metadata,
+            "clean_report": clean_report,
+            "insights": insights,
+            "quality_score": processor.quality_score,
+            "suggested_questions": suggested_questions,
+            "sample_data": processor.df.head(10).to_dict('records')
+        }
+    
+    except Exception as e:
+        raise HTTPException(500, f"Error: {str(e)}")
+
 @app.get("/api/datasets")
 async def list_datasets():
-    """List all uploaded datasets"""
     return {
         "datasets": [
             {
@@ -799,6 +1039,7 @@ async def list_datasets():
                 "filename": v['filename'],
                 "rows": v['metadata']['rows'],
                 "columns": v['metadata']['columns'],
+                "quality_score": v['quality_score']['overall'],
                 "upload_time": v['upload_time']
             }
             for k, v in DATASETS.items()
@@ -809,10 +1050,17 @@ async def list_datasets():
 # RUN SERVER
 # ============================================================================
 if __name__ == "__main__":
-    print(f"\n🚀 Starting AI Data Analytics Agent")
+    print(f"\n🚀 Starting AI Data Analytics Agent - Enhanced Version")
     print(f"📊 LLM Provider: {LLM_PROVIDER.upper()}")
     print(f"🤖 Model: {MODEL_NAME}")
     print(f"🌐 Server: http://localhost:8000")
-    print(f"📖 Docs: http://localhost:8000/docs\n")
+    print(f"📖 Docs: http://localhost:8000/docs")
+    print(f"\n✨ New Features:")
+    print(f"   • Auto-suggested questions")
+    print(f"   • Data quality scoring")
+    print(f"   • Column-specific analysis")
+    print(f"   • Multiple export formats (PDF, Excel, CSV, JSON)")
+    print(f"   • Sample datasets\n")
     
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
